@@ -1,6 +1,20 @@
 import { Context } from "../types/index";
-import { annotate } from "./annotate";
+import { annotate, AnnotateCommentReference } from "./annotate";
 import { issueMatching, issueMatchingForUsers } from "./issue-matching";
+
+export function parseCommentReference(commentUrl: string): AnnotateCommentReference | null {
+  const fullUrlMatch = commentUrl.match(/^https?:\/\/(?:www\.)?github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/\d+#issuecomment-(\d+)$/i);
+  if (fullUrlMatch) {
+    return {
+      owner: fullUrlMatch[1],
+      repo: fullUrlMatch[2],
+      id: fullUrlMatch[3],
+    };
+  }
+
+  const idOnlyMatch = commentUrl.match(/#issuecomment-(\d+)$/);
+  return idOnlyMatch ? { id: idOnlyMatch[1] } : null;
+}
 
 // GitHub usernames are 1-39 chars, alphanumeric or hyphen, no leading/trailing hyphen.
 const GITHUB_LOGIN_REGEX = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
@@ -55,16 +69,14 @@ export async function commandHandler(context: Context<"issue_comment.created">) 
   if (context.command.name === "annotate") {
     const commentUrl = context.command.parameters.commentUrl ?? null;
     const scope = context.command.parameters.scope ?? "org";
-    let commentId = null;
+    let commentReference: AnnotateCommentReference | null = null;
     if (commentUrl) {
-      const commentRegex = /#issuecomment-(\d+)$/;
-      const match = commentUrl.match(commentRegex);
-      if (!match) {
+      commentReference = parseCommentReference(commentUrl);
+      if (!commentReference) {
         throw logger.error("Invalid comment URL");
       }
-      commentId = match[1];
     }
-    await annotate(context, commentId, scope);
+    await annotate(context, commentReference, scope);
   }
 }
 
@@ -74,7 +86,7 @@ export async function userAnnotate(context: Context<"issue_comment.created">) {
   const splitComment = comment.body.trim().split(/\s+/);
   const commandName = splitComment[0].replace("/", "");
 
-  let commentId = null;
+  let commentReference: AnnotateCommentReference | null = null;
   let scope = "org";
 
   if (commandName === "annotate") {
@@ -87,17 +99,15 @@ export async function userAnnotate(context: Context<"issue_comment.created">) {
           throw logger.error("Invalid scope");
         }
 
-        const commentRegex = /#issuecomment-(\d+)$/;
-        const match = commentUrl.match(commentRegex);
-        if (!match) {
+        commentReference = parseCommentReference(commentUrl);
+        if (!commentReference) {
           throw logger.error("Invalid comment URL");
         }
-        commentId = match[1];
       } else {
         throw logger.error("Invalid parameters");
       }
     }
-    await annotate(context, commentId, scope);
+    await annotate(context, commentReference, scope);
   }
 
   if (commandName === "recommendation") {
