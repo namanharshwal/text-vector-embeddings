@@ -154,7 +154,7 @@ describe("Plugin tests", () => {
           title: STRINGS.SIMILAR_ISSUE,
           url: STRINGS.ISSUE_URL,
           number: 3,
-          lastEditedAt: "2020-01-12T17:52:02Z",
+          lastEditedAt: new Date(0).toISOString(),
           body: warningThresholdIssue1.issue_body,
           repository: {
             name: STRINGS.TEST_REPO,
@@ -234,7 +234,7 @@ describe("Plugin tests", () => {
         title: STRINGS.SIMILAR_ISSUE,
         url: STRINGS.ISSUE_URL,
         number: 3,
-        lastEditedAt: "2020-01-12T17:52:02Z",
+        lastEditedAt: new Date(0).toISOString(),
         body: matchThresholdIssue1.issue_body,
         repository: {
           name: STRINGS.TEST_REPO,
@@ -638,6 +638,44 @@ describe("Plugin tests", () => {
 
     const updatedComment = db.issueComments.findFirst({ where: { id: { equals: 1 } } }) as unknown as Context<"issue_comment.created">["payload"]["comment"];
     expect(updatedComment.body).not.toContain(`[^01^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})`);
+  });
+
+  it("Should format deduplication footnotes and caution alerts without trailing #<issue_number> hash suffix (#93)", async () => {
+    const [warningThresholdIssue1, warningThresholdIssue2] = fetchSimilarIssues("warning_threshold_80");
+    const { context: context2 } = createContextIssues(warningThresholdIssue2.issue_body, "warning_hash_test", 42, warningThresholdIssue2.title);
+    context2.eventName = ISSUES_EDITED_EVENT_NAME;
+
+    context2.adapters.supabase.issue.findSimilarIssues = mock().mockResolvedValue([{ issue_id: "warning_target", similarity: 0.8 }]);
+
+    let capturedUpdatedBody = "";
+    context2.octokit.rest.issues.update = mock(async (params: { owner: string; repo: string; issue_number: number; body: string }) => {
+      capturedUpdatedBody = params.body;
+      return { data: {} };
+    }) as unknown as typeof octokit.rest.issues.update;
+
+    context2.octokit.graphql = mock().mockResolvedValue({
+      node: {
+        __typename: "Issue",
+        title: "Deduplication Target Issue",
+        url: "https://github.com/ubiquity/test-repo/issues/42",
+        number: 42,
+        lastEditedAt: new Date(0).toISOString(),
+        body: warningThresholdIssue1.issue_body,
+        repository: {
+          name: STRINGS.TEST_REPO,
+          owner: {
+            login: STRINGS.USER_1,
+          },
+        },
+      },
+    }) as unknown as typeof context2.octokit.graphql;
+
+    context2.adapters.supabase.issue.createIssue = mock(async () => {});
+
+    await runPlugin(context2);
+
+    expect(capturedUpdatedBody).toContain("https://www.github.com/ubiquity/test-repo/issues/42");
+    expect(capturedUpdatedBody).not.toContain("https://www.github.com/ubiquity/test-repo/issues/42#42");
   });
 
   function createContext(
