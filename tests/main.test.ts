@@ -180,17 +180,12 @@ describe("Plugin tests", () => {
       });
 
       context2.octokit.rest.issues.update = mock(async (params: { owner: string; repo: string; issue_number: number; body: string }) => {
-        // Find the most similar sentence (first sentence in this case)
-        const updatedBody =
-          warningThresholdIssue2.issue_body.replace(STRINGS.SIMILAR_ISSUE_TITLE, `${STRINGS.SIMILAR_ISSUE_TITLE}[^01^]`) +
-          `\n\n[^01^]: ⚠ 80% possible duplicate - [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})\n\n`;
-
         db.issue.update({
           where: {
             number: { equals: params.issue_number },
           },
           data: {
-            body: updatedBody,
+            body: params.body,
           },
         });
       }) as unknown as typeof octokit.rest.issues.update;
@@ -199,7 +194,7 @@ describe("Plugin tests", () => {
 
       const issue = db.issue.findFirst({ where: { node_id: { equals: "warning2" } } }) as unknown as Context["payload"]["issue"];
       expect(issue.state).toBe("open");
-      expect(issue.body).toContain(`[^01^]: ⚠ 80% possible duplicate - [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})`);
+      expect(issue.body).toContain(`[^deduplication-1^]: ⚠ 80% possible duplicate - [${STRINGS.SIMILAR_ISSUE}]`);
     }
   );
 
@@ -222,7 +217,8 @@ describe("Plugin tests", () => {
       );
     });
     await runPlugin(context);
-    const { context: context2 } = createContextIssues(matchThresholdIssue2.issue_body, "match2", 4, matchThresholdIssue2.title);
+    const issueBodyWithAnnotationFootnote = `${matchThresholdIssue2.issue_body} [^annotation-1^]\n\n[^annotation-1^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})\n`;
+    const { context: context2 } = createContextIssues(issueBodyWithAnnotationFootnote, "match2", 4, matchThresholdIssue2.title);
     context2.eventName = ISSUES_EDITED_EVENT_NAME;
 
     // Mock the findSimilarIssues function to return a result with similarity above match threshold
@@ -247,7 +243,7 @@ describe("Plugin tests", () => {
 
     context2.adapters.supabase.issue.createIssue = mock(async () => {
       createIssue(
-        matchThresholdIssue2.issue_body,
+        issueBodyWithAnnotationFootnote,
         "match2",
         matchThresholdIssue2.title,
         4,
@@ -261,13 +257,12 @@ describe("Plugin tests", () => {
 
     context2.octokit.rest.issues.update = mock(
       async (params: { owner: string; repo: string; issue_number: number; body?: string; state?: string; state_reason?: string }) => {
-        const updatedBody = `${matchThresholdIssue2.issue_body}\n\n>[!CAUTION]\n> This issue may be a duplicate of the following issues:\n> - [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})\n`;
         db.issue.update({
           where: {
             number: { equals: params.issue_number },
           },
           data: {
-            ...(params.body && { body: updatedBody }),
+            ...(params.body && { body: params.body }),
             ...(params.state && { state: params.state }),
             ...(params.state_reason && { state_reason: params.state_reason }),
           },
@@ -277,11 +272,14 @@ describe("Plugin tests", () => {
 
     await runPlugin(context2);
     const issue = db.issue.findFirst({ where: { number: { equals: 4 } } }) as unknown as Context["payload"]["issue"];
+    const cautionMarker = ">[!CAUTION]";
     expect(issue.state).toBe("closed");
     expect(issue.state_reason).toBe("not_planned");
-    expect(issue.body).toContain(">[!CAUTION]");
+    expect(issue.body).toContain(cautionMarker);
     expect(issue.body).toContain("This issue may be a duplicate of the following issues:");
-    expect(issue.body).toContain(`- [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})`);
+    expect(issue.body).toContain(`- [${STRINGS.SIMILAR_ISSUE}]`);
+    expect(issue.body.indexOf("[^annotation-1^]")).toBeLessThan(issue.body.indexOf(cautionMarker));
+    expect(issue.body.indexOf(cautionMarker)).toBeLessThan(issue.body.indexOf("[^annotation-1^]:"));
   });
 
   it("When issue matching is triggered, it should suggest contributors based on similarity", async () => {
@@ -459,11 +457,11 @@ describe("Plugin tests", () => {
     expect(issue.state).toBe("open");
     // Verify the footnote is added after the line containing the markdown link
     expect(issue.body).toContain(
-      "_Originally posted by @0x4007 in https://www.github.com/ubiquity-os-marketplace/command-start-stop/issues/100#issuecomment-2535532258_ [^01^]"
+      "_Originally posted by @0x4007 in https://www.github.com/ubiquity-os-marketplace/command-start-stop/issues/100#issuecomment-2535532258_ [^deduplication-1^]"
     );
     // Verify the markdown link is not broken
     expect(issue.body).not.toContain(
-      "_Originally posted by @0x4007 in https://www.github.com/ubiquity-os-marketplace/command-start-stop/issues/100#issuecomment-2535532258_[^01^]"
+      "_Originally posted by @0x4007 in https://www.github.com/ubiquity-os-marketplace/command-start-stop/issues/100#issuecomment-2535532258_[^deduplication-1^]"
     );
   });
 
@@ -507,17 +505,12 @@ describe("Plugin tests", () => {
     }) as unknown as typeof octokit.rest.issues.listComments;
 
     context2.octokit.rest.issues.updateComment = mock(async (params: { owner: string; repo: string; comment_id: number; body: string }) => {
-      // Find the most similar sentence (first sentence in this case)
-      const updatedBody =
-        annotateComment.body.replace(STRINGS.SIMILAR_COMMENT, `${STRINGS.SIMILAR_COMMENT}[^01^]`) +
-        `\n\n[^01^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})\n\n`;
-
       db.issueComments.update({
         where: {
           id: { equals: params.comment_id },
         },
         data: {
-          body: updatedBody,
+          body: params.body,
         },
       });
     }) as unknown as typeof octokit.rest.issues.updateComment;
@@ -525,7 +518,7 @@ describe("Plugin tests", () => {
     await runPlugin(context2);
 
     const updatedComment = db.issueComments.findFirst({ where: { id: { equals: 1 } } }) as unknown as Context<"issue_comment.created">["payload"]["comment"];
-    expect(updatedComment.body).toContain(`[^01^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})`);
+    expect(updatedComment.body).toContain(`[^annotation-1^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}]`);
   });
 
   it("When demoFlag is true, it should skip storing issues in the database", async () => {
@@ -619,17 +612,12 @@ describe("Plugin tests", () => {
     }) as unknown as typeof octokit.rest.issues.getComment;
 
     context2.octokit.rest.issues.updateComment = mock(async (params: { owner: string; repo: string; comment_id: number; body: string }) => {
-      // Find the most similar sentence (first sentence in this case)
-      const updatedBody =
-        annotateComment.body.replace(STRINGS.SIMILAR_COMMENT, `${STRINGS.SIMILAR_COMMENT}[^01^]`) +
-        `\n\n[^01^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})\n\n`;
-
       db.issueComments.update({
         where: {
           id: { equals: params.comment_id },
         },
         data: {
-          body: updatedBody,
+          body: params.body,
         },
       });
     }) as unknown as typeof octokit.rest.issues.updateComment;
@@ -637,7 +625,7 @@ describe("Plugin tests", () => {
     await runPlugin(context2);
 
     const updatedComment = db.issueComments.findFirst({ where: { id: { equals: 1 } } }) as unknown as Context<"issue_comment.created">["payload"]["comment"];
-    expect(updatedComment.body).not.toContain(`[^01^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})`);
+    expect(updatedComment.body).not.toContain(`[^annotation-1^]: 88% similar to issue: [${STRINGS.SIMILAR_ISSUE}]`);
   });
 
   function createContext(

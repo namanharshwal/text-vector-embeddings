@@ -1,4 +1,18 @@
-const FOOTNOTE_DEF_REGEX = /\[\^(\d+)\^\]: ⚠ \d+% possible duplicate - [^\n]+(\n|$)/g;
+const FOOTNOTE_REF_REGEX = /\[\^(?:[a-z-]+-)?(\d+)\^\]/g;
+const FOOTNOTE_DEF_REGEX = /\[\^((?:deduplication-)?\d+)\^\]: ⚠ \d+% possible duplicate - [^\n]+(\n|$)/g;
+
+export function nextFootnoteIndex(content: string): number {
+  const indexes = [...content.matchAll(FOOTNOTE_REF_REGEX)].map((match) => Number(match[1]));
+  return indexes.length ? Math.max(...indexes) + 1 : 1;
+}
+
+export function createFootnoteRef(prefix: string, index: number): string {
+  return `[^${prefix}-${index}^]`;
+}
+
+export function stripFootnoteRef(content: string, footnoteRef: string): string {
+  return content.replaceAll(footnoteRef, "");
+}
 
 export function removeCautionMessages(content: string): string {
   const cautionRegex = />[!CAUTION]\n> This issue may be a duplicate of the following issues:\n((> - \[[^\]]+\]\([^)]+\)\n)+)/g;
@@ -10,11 +24,11 @@ export function stripDuplicateFootnotes(content: string): string {
   let contentWithoutFootnotes = content.replace(FOOTNOTE_DEF_REGEX, "");
   if (footnotes) {
     footnotes.forEach((footnote) => {
-      const footnoteNumber = footnote.match(/\d+/)?.[0];
-      if (!footnoteNumber) {
+      const footnoteRef = footnote.match(/\[\^((?:deduplication-)?\d+)\^\]/)?.[0];
+      if (!footnoteRef) {
         return;
       }
-      contentWithoutFootnotes = contentWithoutFootnotes.replace(new RegExp(`\\[\\^${footnoteNumber}\\^\\]`, "g"), "");
+      contentWithoutFootnotes = stripFootnoteRef(contentWithoutFootnotes, footnoteRef);
     });
   }
   return removeCautionMessages(contentWithoutFootnotes);
