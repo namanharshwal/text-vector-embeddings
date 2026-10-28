@@ -1,6 +1,7 @@
 import { Context } from "../types/index";
 import { cleanContent } from "./issue-deduplication";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 
 export async function addIssue(context: Context<"issues.opened" | "issue_comment.created" | "issue_comment.edited">) {
   const {
@@ -15,7 +16,7 @@ export async function addIssue(context: Context<"issues.opened" | "issue_comment
   let markdown = payload.issue.body && payload.issue.title ? `${payload.issue.body} ${payload.issue.title}` : null;
   const authorId = issue.user?.id || -1;
   const id = issue.node_id;
-  const isPrivate = payload.repository.private;
+  const isPrivate = shouldRedactPrivateRepoComments(payload.repository.private, config.redactPrivateRepoComments);
 
   if (!isHumanAuthor) {
     logger.debug("Issue author is not human; storing issue without embeddings.", {

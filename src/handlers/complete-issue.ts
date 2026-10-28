@@ -1,12 +1,14 @@
 import { Context } from "../types/index";
 import { cleanContent } from "./issue-deduplication";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 
 export async function completeIssue(context: Context<"issues.closed">) {
   const {
     logger,
     adapters: { supabase, issueStore },
     payload,
+    config,
   } = context;
 
   // Only handle issues closed as completed
@@ -22,7 +24,7 @@ export async function completeIssue(context: Context<"issues.closed">) {
   }
 
   const id = payload.issue.node_id;
-  const isPrivate = payload.repository.private;
+  const isPrivate = shouldRedactPrivateRepoComments(payload.repository.private, config.redactPrivateRepoComments);
   const authorType = payload.issue.user?.type;
   const isHumanAuthor = authorType === "User";
   let markdown = payload.issue.body && payload.issue.title ? payload.issue.body + " " + payload.issue.title : null;

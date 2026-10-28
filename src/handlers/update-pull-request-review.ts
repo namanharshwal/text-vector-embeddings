@@ -2,6 +2,7 @@ import { Context } from "../types/index";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
 import { removeAnnotateFootnotes } from "./annotate";
 import { buildPullRequestReviewMarkdown, ensurePullRequestIssue } from "./pull-request-review-utils";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 
 export async function updatePullRequestReview(context: Context<"pull_request_review.edited">) {
   const {
@@ -49,7 +50,7 @@ export async function updatePullRequestReview(context: Context<"pull_request_rev
         id: review.node_id ?? `${review.id}`,
         author_id: review.user?.id ?? -1,
         payload,
-        isPrivate: payload.repository.private,
+        isPrivate: shouldRedactPrivateRepoComments(payload.repository.private, config.redactPrivateRepoComments),
         issue_id: issueId ?? pullRequest.node_id ?? null,
         docType: "pull_request_review",
       },

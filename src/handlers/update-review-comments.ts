@@ -1,5 +1,6 @@
 import { Context } from "../types/index";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 import { removeAnnotateFootnotes } from "./annotate";
 import { buildReviewCommentMarkdown, ensurePullRequestIssue, fetchParentReviewComment, formatReviewThreadContext } from "./pull-request-review-utils";
 
@@ -14,7 +15,7 @@ export async function updateReviewComment(context: Context<"pull_request_review_
   const markdown = comment.body;
   const authorId = comment.user?.id || -1;
   const id = comment.node_id;
-  const isPrivate = payload.repository.private;
+  const isPrivate = shouldRedactPrivateRepoComments(payload.repository.private, config.redactPrivateRepoComments);
   const pullRequest = payload.pull_request;
 
   const isHumanAuthor = comment.user?.type === "User";

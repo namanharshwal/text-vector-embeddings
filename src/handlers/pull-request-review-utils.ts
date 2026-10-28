@@ -1,6 +1,7 @@
 import { Context } from "../types/index";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
 import { removeAnnotateFootnotes } from "./annotate";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 
 type PullRequestContext = Context;
 
@@ -203,7 +204,7 @@ export async function ensurePullRequestIssue(context: PullRequestContext, pullRe
   }
 
   const authorId = pullRequest.user?.id ?? -1;
-  const isPrivate = payload.repository?.private ?? false;
+  const isPrivate = shouldRedactPrivateRepoComments(payload.repository?.private ?? false, config.redactPrivateRepoComments);
   const queueSettings = getEmbeddingQueueSettings(context.env);
 
   await supabase.issue.createIssue(

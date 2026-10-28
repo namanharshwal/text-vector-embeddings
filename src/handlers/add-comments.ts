@@ -3,6 +3,7 @@ import { addIssue } from "./add-issue";
 import { removeAnnotateFootnotes } from "./annotate";
 import { ensurePullRequestIssue } from "./pull-request-review-utils";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 
 export async function addComments(context: Context<"issue_comment.created">) {
   const {
@@ -15,7 +16,7 @@ export async function addComments(context: Context<"issue_comment.created">) {
   const markdown = comment.body;
   const authorId = comment.user?.id || -1;
   const id = comment.node_id;
-  const isPrivate = payload.repository.private;
+  const isPrivate = shouldRedactPrivateRepoComments(payload.repository.private, config.redactPrivateRepoComments);
   const isPullRequestComment = !!payload.issue.pull_request;
   let issueId = payload.issue.node_id;
 

@@ -1,10 +1,12 @@
 import { Context } from "../types/index";
 import { getEmbeddingQueueSettings } from "../utils/embedding-queue";
+import { shouldRedactPrivateRepoComments } from "../utils/privacy";
 
 export async function issueTransfer(context: Context<"issues.transferred">) {
   const {
     logger,
     adapters: { supabase, issueStore },
+    config,
   } = context;
   const { changes, issue } = context.payload;
   const nodeId = issue.node_id;
@@ -16,7 +18,7 @@ export async function issueTransfer(context: Context<"issues.transferred">) {
   const markdownParts = [new_issue.body?.trim() ?? "", new_issue.title?.trim() ?? ""].filter(Boolean);
   let markdown = markdownParts.length > 0 ? markdownParts.join(" ") : null;
   const authorId = new_issue.user?.id || -1;
-  const isPrivate = new_repository.private;
+  const isPrivate = shouldRedactPrivateRepoComments(new_repository.private, config.redactPrivateRepoComments);
   const queueSettings = getEmbeddingQueueSettings(context.env);
 
   if (!isHumanAuthor) {

@@ -39,6 +39,7 @@ Deployment notes:
     dedupeWarningThreshold: 0.75
     annotateThreshold: 0.65
     jobMatchingThreshold: 0.75
+    redactPrivateRepoComments: false
 ```
 
 ## Recommendations
