@@ -23,6 +23,26 @@ interface CommentGraphqlResponse {
   mostSimilarSentence: { sentence: string; similarity: number; index: number };
 }
 
+export const NO_ANNOTATE_MATCHES_MESSAGE =
+  "> [!WARNING]\n> The annotate command ran successfully, but no similar issues or comments were found exceeding the similarity threshold.";
+export const NO_PREVIOUS_COMMENT_MESSAGE = "> [!WARNING]\n> No comments found before the annotate command to analyze.";
+export const EMPTY_COMMENT_BODY_MESSAGE = "> [!WARNING]\n> The targeted comment has an empty body. No content available to annotate.";
+
+export async function postAnnotateResponse(context: Context, body: string, forceTag = true) {
+  const options = forceTag ? { raw: true, commentKind: "command-response" } : { raw: true };
+  if (context.commentHandler?.postComment) {
+    await context.commentHandler.postComment(context, context.logger.warn(body), options);
+  } else if ("issue" in context.payload && context.payload.issue?.number) {
+    context.logger.warn(body);
+    await context.octokit.rest.issues.createComment({
+      owner: context.payload.repository.owner.login,
+      repo: context.payload.repository.name,
+      issue_number: context.payload.issue.number,
+      body,
+    });
+  }
+}
+
 export async function annotate(context: Context<"issue_comment.created">, commentId: string | null, scope: string) {
   const { logger, octokit, payload } = context;
 
@@ -41,6 +61,7 @@ export async function annotate(context: Context<"issue_comment.created">, commen
       await commentChecker(context, commentBeforeAnnotate, scope);
     } else {
       logger.error("No comments before the annotate command");
+      await postAnnotateResponse(context, NO_PREVIOUS_COMMENT_MESSAGE);
     }
   } else {
     const { data } = await octokit.rest.issues.getComment({
@@ -68,6 +89,7 @@ export async function commentChecker(context: Context<"issue_comment.created">, 
   let commentBody = comment.body;
   if (!commentBody) {
     logger.info("Comment body is empty", { commentBody });
+    await postAnnotateResponse(context, EMPTY_COMMENT_BODY_MESSAGE);
     return;
   }
   commentBody = removeAnnotateFootnotes(commentBody);
@@ -141,6 +163,7 @@ async function handleSimilarIssuesAndComments(
   commentList: CommentGraphqlResponse[]
 ) {
   if (!issueList.length && !commentList.length) {
+    await postAnnotateResponse(context, NO_ANNOTATE_MATCHES_MESSAGE);
     return;
   }
   // Find existing footnotes in the body
