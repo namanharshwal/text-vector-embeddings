@@ -129,7 +129,17 @@ export async function runPlugin(context: Context) {
         logger.debug("Embedding queue enabled; skipping issue matching on label.");
         return;
       }
-      return await issueMatchingWithComment(context as Context<"issues.labeled">);
+      const labeledContext = context as Context<"issues.labeled">;
+      const createdAt = new Date(labeledContext.payload.issue.created_at).getTime();
+      const updatedAt = new Date(labeledContext.payload.issue.updated_at).getTime();
+      if (!Number.isNaN(createdAt) && !Number.isNaN(updatedAt) && Math.abs(updatedAt - createdAt) < 10000) {
+        logger.debug("Skipping issue matching on initial label because issue matching is handled on issues.opened.", {
+          created_at: labeledContext.payload.issue.created_at,
+          updated_at: labeledContext.payload.issue.updated_at,
+        });
+        return;
+      }
+      return await issueMatchingWithComment(labeledContext);
     } else {
       logger.warn(`Unsupported event: ${eventName}`);
       return;

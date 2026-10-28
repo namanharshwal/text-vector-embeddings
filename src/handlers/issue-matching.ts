@@ -55,17 +55,19 @@ export async function issueMatchingWithComment(context: Context<"issues.opened" 
     issue_number: issue.number,
   })) as IssueCommentSummary[];
 
-  //Check if the comment already exists
-  const existingComment = listIssues.find((comment) => comment.body && comment.body.includes(">[!NOTE]" + "\n" + commentStart));
+  //Check if any previous recommendation comments exist
+  const existingComments = listIssues.filter((comment) => comment.body && comment.body.includes(">[!NOTE]" + "\n" + commentStart));
 
   if (matchResultArray.size === 0) {
-    if (existingComment) {
-      // If the comment already exists, delete it
-      await octokit.rest.issues.deleteComment({
-        owner: payload.repository.owner.login,
-        repo: payload.repository.name,
-        comment_id: existingComment.id,
-      });
+    if (existingComments.length > 0) {
+      // If previous recommendation comments exist, delete them all
+      for (const comment of existingComments) {
+        await octokit.rest.issues.deleteComment({
+          owner: payload.repository.owner.login,
+          repo: payload.repository.name,
+          comment_id: comment.id,
+        });
+      }
     }
     logger.debug("No suitable contributors found");
     return;
@@ -79,13 +81,22 @@ export async function issueMatchingWithComment(context: Context<"issues.opened" 
 
   logger.debug("Comment to be added", { comment });
 
-  if (existingComment) {
+  if (existingComments.length > 0) {
+    // Update the first existing recommendation comment
     await context.octokit.rest.issues.updateComment({
       owner: payload.repository.owner.login,
       repo: payload.repository.name,
-      comment_id: existingComment.id,
+      comment_id: existingComments[0].id,
       body: comment,
     });
+    // Delete any excess duplicate recommendation comments that may have been created
+    for (const duplicateComment of existingComments.slice(1)) {
+      await context.octokit.rest.issues.deleteComment({
+        owner: payload.repository.owner.login,
+        repo: payload.repository.name,
+        comment_id: duplicateComment.id,
+      });
+    }
   } else {
     await context.octokit.rest.issues.createComment({
       owner: payload.repository.owner.login,
@@ -158,8 +169,10 @@ async function issueMatchingInternal(context: Context<IssueMatchingEvents>, opti
   });
 
   if (similarIssues && similarIssues.length > 0) {
-    similarIssues.sort((a: IssueSimilaritySearchResult, b: IssueSimilaritySearchResult) => b.similarity - a.similarity); // Sort by similarity
-    const fetchPromises = similarIssues.map(async (issue: IssueSimilaritySearchResult) => {
+    // Deduplicate similar issues by issue_id to prevent duplicate calculations
+    const uniqueSimilarIssues = similarIssues.filter((issue, index, self) => index === self.findIndex((t) => t.issue_id === issue.issue_id));
+    uniqueSimilarIssues.sort((a: IssueSimilaritySearchResult, b: IssueSimilaritySearchResult) => b.similarity - a.similarity); // Sort by similarity
+    const fetchPromises = uniqueSimilarIssues.map(async (issue: IssueSimilaritySearchResult) => {
       try {
         const issueObject: IssueNodeResponse = await context.octokit.graphql(
           /* GraphQL */
@@ -215,22 +228,23 @@ async function issueMatchingInternal(context: Context<IssueMatchingEvents>, opti
 
       if (isEligible) {
         const assignees = issue.node.assignees.nodes;
-        assignees.forEach((assignee: { login: string; url: string }) => {
+        // Deduplicate assignees by login
+        const uniqueAssignees = assignees.filter((assignee, index, self) => index === self.findIndex((a) => a.login === assignee.login));
+        uniqueAssignees.forEach((assignee: { login: string; url: string }) => {
           if (options.allowedLogins && !options.allowedLogins.has(assignee.login)) {
             return;
           }
           const similarityPercentage = Math.round(issue.similarity * 100);
           const issueLink = issue.node.url.replace(/https?:\/\/github.com/, "https://www.github.com");
-          if (matchResultArray.has(assignee.login)) {
-            matchResultArray
-              .get(assignee.login)
-              ?.push(
-                `> \`${similarityPercentage}% Match\` [${issue.node.repository.owner.login}/${issue.node.repository.name}#${issue.node.url.split("/").pop()}](${issueLink})`
-              );
+          const matchLine = `> \`${similarityPercentage}% Match\` [${issue.node.repository.owner.login}/${issue.node.repository.name}#${issue.node.url.split("/").pop()}](${issueLink})`;
+
+          const existingMatches = matchResultArray.get(assignee.login);
+          if (existingMatches) {
+            if (!existingMatches.includes(matchLine)) {
+              existingMatches.push(matchLine);
+            }
           } else {
-            matchResultArray.set(assignee.login, [
-              `> \`${similarityPercentage}% Match\` [${issue.node.repository.owner.login}/${issue.node.repository.name}#${issue.node.url.split("/").pop()}](${issueLink})`,
-            ]);
+            matchResultArray.set(assignee.login, [matchLine]);
           }
         });
       }
@@ -256,7 +270,7 @@ async function issueMatchingInternal(context: Context<IssueMatchingEvents>, opti
       .sort((a, b) => b.maxSimilarity - a.maxSimilarity);
 
     logger.debug("Sorted contributors", { sortedContributors });
-    return { matchResultArray, similarIssues, sortedContributors };
+    return { matchResultArray, similarIssues: uniqueSimilarIssues, sortedContributors };
   }
 
   if (options.ensureLogins && options.ensureLogins.length > 0) {
