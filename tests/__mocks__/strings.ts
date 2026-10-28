@@ -23,4 +23,6 @@ export const STRINGS: Record<string, string> = {
   ISSUE_URL_TEMPLATE: "https://github.com/ubiquity/test-repo/issues/1",
   CONTRIBUTOR_SUGGESTION_TEXT: "The following contributors may be suitable for this task:",
   SIMILAR_COMMENT: "One time we we working on a fix where the price label should be the first thing that start command checks for and throws an error for",
+  LAST_EDITED_AT: "2020-01-12T17:52:02Z",
+  DUP_NODE_ID: "I_kwDOMoorW86ndQR-",
 };

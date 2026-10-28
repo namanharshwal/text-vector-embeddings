@@ -154,7 +154,7 @@ describe("Plugin tests", () => {
           title: STRINGS.SIMILAR_ISSUE,
           url: STRINGS.ISSUE_URL,
           number: 3,
-          lastEditedAt: "2020-01-12T17:52:02Z",
+          lastEditedAt: STRINGS.LAST_EDITED_AT,
           body: warningThresholdIssue1.issue_body,
           repository: {
             name: STRINGS.TEST_REPO,
@@ -231,10 +231,12 @@ describe("Plugin tests", () => {
     ] as unknown as IssueSimilaritySearchResult[]);
     context2.octokit.graphql = mock().mockResolvedValue({
       node: {
+        id: STRINGS.DUP_NODE_ID,
+        databaseId: 9001,
         title: STRINGS.SIMILAR_ISSUE,
         url: STRINGS.ISSUE_URL,
         number: 3,
-        lastEditedAt: "2020-01-12T17:52:02Z",
+        lastEditedAt: STRINGS.LAST_EDITED_AT,
         body: matchThresholdIssue1.issue_body,
         repository: {
           name: STRINGS.TEST_REPO,
@@ -259,8 +261,26 @@ describe("Plugin tests", () => {
       );
     });
 
+    let lastUpdateParams: {
+      owner: string;
+      repo: string;
+      issue_number: number;
+      body?: string;
+      state?: string;
+      state_reason?: string;
+      duplicate_issue_id?: number;
+    } | null = null;
     context2.octokit.rest.issues.update = mock(
-      async (params: { owner: string; repo: string; issue_number: number; body?: string; state?: string; state_reason?: string }) => {
+      async (params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        body?: string;
+        state?: string;
+        state_reason?: string;
+        duplicate_issue_id?: number;
+      }) => {
+        lastUpdateParams = params;
         const updatedBody = `${matchThresholdIssue2.issue_body}\n\n>[!CAUTION]\n> This issue may be a duplicate of the following issues:\n> - [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})\n`;
         db.issue.update({
           where: {
@@ -278,10 +298,65 @@ describe("Plugin tests", () => {
     await runPlugin(context2);
     const issue = db.issue.findFirst({ where: { number: { equals: 4 } } }) as unknown as Context["payload"]["issue"];
     expect(issue.state).toBe("closed");
-    expect(issue.state_reason).toBe("not_planned");
+    expect(issue.state_reason).toBe("duplicate");
+    expect(lastUpdateParams?.duplicate_issue_id).toBe(9001);
     expect(issue.body).toContain(">[!CAUTION]");
     expect(issue.body).toContain("This issue may be a duplicate of the following issues:");
     expect(issue.body).toContain(`- [${STRINGS.SIMILAR_ISSUE}](${STRINGS.ISSUE_URL})`);
+  });
+
+  it("When an issue is already closed as a duplicate, it should not attempt to re-close or overwrite state reason", async () => {
+    const [matchThresholdIssue1, matchThresholdIssue2] = fetchSimilarIssues("match_threshold_95");
+    const { context } = createContextIssues(
+      matchThresholdIssue2.issue_body,
+      "match-already-closed",
+      5,
+      matchThresholdIssue2.title,
+      { login: "test", id: 1 },
+      "closed",
+      "duplicate"
+    );
+    context.eventName = ISSUES_EDITED_EVENT_NAME;
+    context.adapters.supabase.issue.findSimilarIssues = mock().mockResolvedValue([
+      { issue_id: "match1", similarity: 0.96 },
+    ] as unknown as IssueSimilaritySearchResult[]);
+    context.octokit.graphql = mock().mockResolvedValue({
+      node: {
+        id: STRINGS.DUP_NODE_ID,
+        databaseId: 9001,
+        title: STRINGS.SIMILAR_ISSUE,
+        url: STRINGS.ISSUE_URL,
+        number: 3,
+        lastEditedAt: STRINGS.LAST_EDITED_AT,
+        body: matchThresholdIssue1.issue_body,
+        repository: {
+          name: STRINGS.TEST_REPO,
+          owner: {
+            login: STRINGS.USER_1,
+          },
+        },
+      },
+    }) as unknown as typeof context.octokit.graphql;
+
+    let didUpdateWithState = false;
+    context.octokit.rest.issues.update = mock(
+      async (params: {
+        owner: string;
+        repo: string;
+        issue_number: number;
+        body?: string;
+        state?: string;
+        state_reason?: string;
+        duplicate_issue_id?: number;
+      }) => {
+        if (params.state || params.state_reason || params.duplicate_issue_id) {
+          didUpdateWithState = true;
+        }
+      }
+    ) as unknown as typeof octokit.rest.issues.update;
+
+    await runPlugin(context);
+    expect(didUpdateWithState).toBe(false);
   });
 
   it("When issue matching is triggered, it should suggest contributors based on similarity", async () => {

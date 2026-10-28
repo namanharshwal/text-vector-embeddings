@@ -38,6 +38,8 @@ export const handlers = [
     )
   ),
   // get user
+  http.get("https://www.github.com/*", () => new HttpResponse(null, { status: 404 })),
+  http.get("https://github.com/*", () => new HttpResponse(null, { status: 404 })),
   http.get("https://api.github.com/users/:username", ({ params: { username } }) =>
     HttpResponse.json(db.users.findFirst({ where: { login: { equals: username as string } } }))
   ),

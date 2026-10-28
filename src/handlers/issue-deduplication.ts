@@ -10,6 +10,8 @@ import { findEditDistance } from "../utils/string-similarity";
 
 export interface IssueGraphqlResponse {
   node: {
+    id?: string;
+    databaseId?: number;
     title: string;
     number: number;
     url: string;
@@ -74,24 +76,54 @@ export async function issueDedupe(context: Context<"issues.opened" | "issues.edi
     const matchIssues = processedIssues.filter((issue) => parseFloat(issue.similarity) / 100 >= context.config.dedupeMatchThreshold);
     if (matchIssues.length > 0) {
       logger.info(`Similar issue which matches more than ${context.config.dedupeMatchThreshold} already exists`, { matchIssues });
+      const duplicateIssue = matchIssues.reduce((best, issue) => (parseFloat(issue.similarity) > parseFloat(best.similarity) ? issue : best));
       //To the issue body, add a footnote with the link to the similar issue
       const updatedBody = await handleMatchIssuesComment(context, payload, cleanedIssueBody, processedIssues);
       const outputBody = updatedBody || cleanedIssueBody;
       const nextBody = updateComment ? appendPluginUpdateComment(outputBody, updateComment) : outputBody;
       const isBodyUnchanged = normalizeWhitespace(originalIssue.body ?? "") === normalizeWhitespace(nextBody);
-      const shouldClose = originalIssue.state !== "closed" || originalIssue.state_reason !== "not_planned";
+      const shouldClose = originalIssue.state !== "closed" || originalIssue.state_reason !== "duplicate";
       if (isBodyUnchanged && !shouldClose) {
         logger.info("Issue body unchanged after dedupe match update", { issueNumber: originalIssue.number });
         return;
+      }
+      if (shouldClose && duplicateIssue.node.id && originalIssue.node_id) {
+        try {
+          await octokit.graphql(
+            /* GraphQL */ `
+              mutation CloseIssueAsDuplicate($input: CloseIssueInput!) {
+                closeIssue(input: $input) {
+                  issue {
+                    id
+                    state
+                    stateReason
+                  }
+                }
+              }
+            `,
+            {
+              input: {
+                issueId: originalIssue.node_id,
+                stateReason: "DUPLICATE",
+                duplicateIssueId: duplicateIssue.node.id,
+              },
+            }
+          );
+        } catch (error) {
+          logger.warn(`Failed to close issue via GraphQL mutation, falling back to REST: ${error}`);
+        }
       }
       await octokit.rest.issues.update({
         owner: payload.repository.owner.login,
         repo: payload.repository.name,
         issue_number: originalIssue.number,
         body: nextBody,
-        state: "closed",
-        state_reason: "not_planned",
-      });
+        ...(shouldClose && {
+          state: "closed",
+          state_reason: "duplicate",
+          ...(duplicateIssue.node.databaseId && { duplicate_issue_id: duplicateIssue.node.databaseId }),
+        }),
+      } as Parameters<typeof octokit.rest.issues.update>[0] & { duplicate_issue_id?: number });
       return;
     }
     if (processedIssues.length > 0) {
@@ -290,6 +322,8 @@ export async function processSimilarIssues(similarIssues: IssueSimilaritySearchR
             query ($issueNodeId: ID!) {
               node(id: $issueNodeId) {
                 ... on Issue {
+                  id
+                  databaseId
                   title
                   url
                   number
