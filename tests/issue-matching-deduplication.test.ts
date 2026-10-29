@@ -12,6 +12,8 @@ const TEST_TASK_DESCRIPTION = "Task description";
 const TEST_TIMESTAMP = "2025-07-23T08:43:10Z";
 const TEST_ISSUE_URL = "https://github.com/ubiquity/test-repo/issues/1";
 const TEST_ISSUE_NODE_ID = "ISSUE_1";
+const SIMILAR_ISSUE_URL = "https://github.com/ubiquity/test-repo/issues/10";
+const ISSUES_OPENED_EVENT = "issues.opened";
 
 describe("issue matching and deduplication (#108)", () => {
   it("cleans up existing duplicate recommendation comments by updating the first and deleting extras", async () => {
@@ -41,7 +43,7 @@ describe("issue matching and deduplication (#108)", () => {
       graphql: mock(async () => ({
         node: {
           title: "Similar Issue",
-          url: "https://github.com/ubiquity/test-repo/issues/10",
+          url: SIMILAR_ISSUE_URL,
           state: "CLOSED",
           stateReason: "COMPLETED",
           closed: true,
@@ -57,7 +59,7 @@ describe("issue matching and deduplication (#108)", () => {
     };
 
     const context: Context<"issues.opened"> = {
-      eventName: "issues.opened",
+      eventName: ISSUES_OPENED_EVENT,
       command: null,
       authToken: "",
       commentHandler: {} as Context<"issues.opened">["commentHandler"],
@@ -183,7 +185,7 @@ describe("issue matching and deduplication (#108)", () => {
       graphql: mock(async () => ({
         node: {
           title: "Ineligible Issue",
-          url: "https://github.com/ubiquity/test-repo/issues/10",
+          url: SIMILAR_ISSUE_URL,
           state: "OPEN",
           closed: false,
           repository: {
@@ -198,7 +200,7 @@ describe("issue matching and deduplication (#108)", () => {
     };
 
     const context: Context<"issues.opened"> = {
-      eventName: "issues.opened",
+      eventName: ISSUES_OPENED_EVENT,
       command: null,
       authToken: "",
       commentHandler: {} as Context<"issues.opened">["commentHandler"],
@@ -240,5 +242,122 @@ describe("issue matching and deduplication (#108)", () => {
     // Both previous comments should be deleted
     expect(deletedComments.length).toBe(2);
     expect(deletedComments.map((c) => c.comment_id)).toEqual([201, 202]);
+  });
+
+  it("reconciles concurrent empty-snapshot creations so only one recommendation comment remains", async () => {
+    const liveComments: Array<{ id: number; body: string }> = [];
+    let nextCommentId = 1000;
+    const deletedCommentIds: number[] = [];
+
+    let readCount = 0;
+    let releaseReads!: () => void;
+    const bothReadsBarrier = new Promise<void>((resolve) => {
+      function registerResolver() {
+        releaseReads = resolve;
+      }
+      registerResolver();
+    });
+
+    function createSharedOctokit() {
+      return {
+        paginate: mock(async () => {
+          readCount++;
+          if (readCount === 2) {
+            releaseReads();
+          }
+          if (readCount <= 2) {
+            await bothReadsBarrier;
+            return [...liveComments];
+          }
+          return [...liveComments];
+        }),
+        rest: {
+          issues: {
+            listComments: mock(),
+            updateComment: mock(async () => {}),
+            deleteComment: mock(async (params: { comment_id: number }) => {
+              deletedCommentIds.push(params.comment_id);
+              const idx = liveComments.findIndex((c) => c.id === params.comment_id);
+              if (idx !== -1) {
+                liveComments.splice(idx, 1);
+              }
+            }),
+            createComment: mock(async (params: { issue_number: number; body: string }) => {
+              const comment = { id: nextCommentId++, body: params.body };
+              liveComments.push(comment);
+              return { data: comment };
+            }),
+          },
+        },
+        graphql: mock(async () => ({
+          node: {
+            title: "Similar Issue",
+            url: SIMILAR_ISSUE_URL,
+            state: "CLOSED",
+            stateReason: "COMPLETED",
+            closed: true,
+            repository: {
+              name: TEST_REPO_NAME,
+              owner: { login: TEST_OWNER_LOGIN },
+            },
+            assignees: {
+              nodes: [{ login: "contributorA", url: "https://github.com/contributorA" }],
+            },
+          },
+        })),
+      };
+    }
+
+    function createTestContext(octokit: ReturnType<typeof createSharedOctokit>): Context<"issues.opened"> {
+      return {
+        eventName: ISSUES_OPENED_EVENT,
+        command: null,
+        authToken: "",
+        commentHandler: {} as Context<"issues.opened">["commentHandler"],
+        payload: {
+          issue: {
+            node_id: TEST_ISSUE_NODE_ID,
+            html_url: TEST_ISSUE_URL,
+            body: TEST_TASK_DESCRIPTION,
+            title: TEST_TASK_TITLE,
+            user: { id: 1, type: "User", login: TEST_AUTHOR_LOGIN },
+            number: 1,
+            created_at: TEST_TIMESTAMP,
+            updated_at: TEST_TIMESTAMP,
+          },
+          repository: {
+            private: false,
+            name: TEST_REPO_NAME,
+            owner: { login: TEST_OWNER_LOGIN },
+          },
+        } as Context<"issues.opened">["payload"],
+        config: {
+          jobMatchingThreshold: 0.7,
+          alwaysRecommend: 3,
+        } as Context<"issues.opened">["config"],
+        logger: new Logs("debug") as unknown as Context<"issues.opened">["logger"],
+        env: {} as Context<"issues.opened">["env"],
+        octokit: octokit as unknown as Context<"issues.opened">["octokit"],
+        adapters: {
+          supabase: {
+            issue: {
+              findSimilarIssuesToMatch: mock(async () => [{ issue_id: "ISSUE_SIMILAR_1", similarity: 0.85 }]),
+            },
+          },
+          close: mock(async () => {}),
+        } as unknown as Context<"issues.opened">["adapters"],
+      };
+    }
+
+    const octokitA = createSharedOctokit();
+    const octokitB = createSharedOctokit();
+    const contextA = createTestContext(octokitA);
+    const contextB = createTestContext(octokitB);
+
+    await Promise.all([issueMatchingWithComment(contextA), issueMatchingWithComment(contextB)]);
+
+    expect(liveComments.length).toBe(1);
+    expect(liveComments[0].id).toBe(1000);
+    expect(deletedCommentIds).toContain(1001);
   });
 });

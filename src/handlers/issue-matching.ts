@@ -104,6 +104,29 @@ export async function issueMatchingWithComment(context: Context<"issues.opened" 
       issue_number: payload.issue.number,
       body: comment,
     });
+
+    // Reconcile potential concurrent empty-snapshot creation race conditions
+    const refreshedComments = (await octokit.paginate(octokit.rest.issues.listComments, {
+      owner: payload.repository.owner.login,
+      repo: payload.repository.name,
+      issue_number: issue.number,
+    })) as IssueCommentSummary[];
+
+    const postCreateMatches = refreshedComments.filter((c) => c.body && c.body.includes(">[!NOTE]" + "\n" + commentStart));
+    if (postCreateMatches.length > 1) {
+      postCreateMatches.sort((a, b) => a.id - b.id);
+      for (const duplicate of postCreateMatches.slice(1)) {
+        try {
+          await octokit.rest.issues.deleteComment({
+            owner: payload.repository.owner.login,
+            repo: payload.repository.name,
+            comment_id: duplicate.id,
+          });
+        } catch (err) {
+          logger.debug("Duplicate comment already deleted or failed deletion", { error: err as Error });
+        }
+      }
+    }
   }
 }
 
